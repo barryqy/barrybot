@@ -1,0 +1,12 @@
+[Unit]
+Description=Pull latest BarryBot demo code from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=APP_USER=$APP_USER
+Environment=APP_GROUP=$APP_GROUP
+Environment=REPO_DIR=$REPO_DIR
+ExecStart=$REPO_DIR/deploy/pull-latest.sh

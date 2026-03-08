@@ -1,0 +1,18 @@
+[Unit]
+Description=agentsec demo backend
+After=network.target
+
+[Service]
+Type=simple
+User=$APP_USER
+Group=$APP_GROUP
+WorkingDirectory=$REPO_DIR/backend
+Environment=PATH=$REPO_DIR/venv/bin
+Environment=PORT=$PORT
+Environment=PYTHON_EXE=$REPO_DIR/venv/bin/python3
+ExecStart=$REPO_DIR/venv/bin/python app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

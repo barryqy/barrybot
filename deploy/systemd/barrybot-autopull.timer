@@ -1,0 +1,10 @@
+[Unit]
+Description=Check GitHub for BarryBot updates
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=barrybot-autopull.service
+
+[Install]
+WantedBy=timers.target
