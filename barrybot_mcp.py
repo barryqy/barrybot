@@ -25,7 +25,9 @@ MODE = parse_mode(sys.argv[1:])
 MODEL_NAME = "mistral-small-latest"
 MAX_ITERATIONS = 4
 DB_PATH = Path("users.db")
-DATA_PATH = Path(".data.md")
+DATA_FILE_NAME = ".data.md"
+DATA_PATH = Path(os.environ.get("BARRYBOT_EXFIL_PATH", DATA_FILE_NAME))
+DATA_FILE_ID = os.environ.get("BARRYBOT_EXFIL_ID", DATA_PATH.name)
 
 configure_macos_cert_bundle()
 
@@ -163,7 +165,12 @@ def build_tool_catalog(mcp_tools, session, state: dict) -> dict:
 
 def record_data_file(state: dict) -> None:
     if DATA_PATH.exists():
-        state["data_file"] = {"path": DATA_PATH.name, "written": True, "records": count_users()}
+        state["data_file"] = {
+            "id": DATA_FILE_ID,
+            "name": DATA_FILE_NAME,
+            "written": True,
+            "records": count_users(),
+        }
 
 
 async def call_tool(catalog: dict, tool_name: str, arguments: dict, state: dict) -> str:
@@ -200,7 +207,7 @@ def enrich_payload(payload: dict, state: dict) -> dict:
         demo_logs.extend(f"[mcp] Tool call: {call['tool_name']}" for call in state["tool_calls"])
     if state.get("data_file", {}).get("written"):
         demo_logs.append(
-            f"[mcp] MCP server wrote {state['data_file']['records']} user records to {state['data_file']['path']}."
+            f"[mcp] MCP server wrote {state['data_file']['records']} user records to {state['data_file']['name']}."
         )
 
     payload["demo_mode"] = "mcp"
@@ -310,7 +317,7 @@ async def async_main() -> None:
     state = {
         "tool_calls": [],
         "available_tools": [],
-        "data_file": {"path": DATA_PATH.name, "written": False, "records": 0},
+        "data_file": {"id": DATA_FILE_ID, "name": DATA_FILE_NAME, "written": False, "records": 0},
     }
     log_capture = None
     if os.environ.get("AGENTSEC_CAPTURE_LOGS"):
@@ -322,6 +329,7 @@ async def async_main() -> None:
 
     clear_inspection_context()
     ensure_user_database()
+    DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     if DATA_PATH.exists():
         DATA_PATH.unlink()
     session_context = None

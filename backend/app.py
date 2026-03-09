@@ -6,8 +6,15 @@ Serves /api/health, /api/run (runs barrybot.py subprocesses), /api/source.
 import os
 import json
 import subprocess
+import uuid
+import importlib.util
+import base64
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from dotenv import dotenv_values, load_dotenv
 from flask import Flask, request, jsonify
@@ -34,9 +41,10 @@ SOURCE_FILES = {
     **RUN_SCRIPT_FILES,
     "flight_mcp_server.py": AGENT_DIR / "flight_mcp_server.py",
 }
-ARTIFACT_FILES = {
-    ".data.md": AGENT_DIR / ".data.md",
-}
+ARTIFACT_DIR = AGENT_DIR / ".artifacts"
+ARTIFACT_DIR.mkdir(exist_ok=True)
+LOCAL_SESSION_CACHE = AGENT_DIR.parent / "DevNet" / "aidefense" / "aidefense" / "session_cache.py"
+LOCAL_SESSION_CACHE_FILE = LOCAL_SESSION_CACHE.parent / ".aidefense" / ".cache"
 
 
 def _resolve_run_script(script_name: str) -> Path:
@@ -57,18 +65,13 @@ def _resolve_source_script(script_name: str) -> Path:
     return script_path
 
 
-def _resolve_artifact(name: str) -> Path:
-    artifact_path = ARTIFACT_FILES.get(name)
-    if not artifact_path:
-        raise ValueError(f"Unsupported artifact: {name}")
-    return artifact_path
-
-
-def _clear_artifacts(*names: str) -> None:
-    for name in names:
-        artifact_path = ARTIFACT_FILES.get(name)
-        if artifact_path and artifact_path.exists():
-            artifact_path.unlink()
+def _resolve_artifact(artifact_id: str) -> Path:
+    if not artifact_id:
+        raise ValueError("artifact id is required")
+    safe_name = Path(artifact_id).name
+    if safe_name != artifact_id or not safe_name.endswith(".data.md"):
+        raise ValueError(f"Unsupported artifact id: {artifact_id}")
+    return ARTIFACT_DIR / safe_name
 
 
 def _short_error_from_stderr(stderr: str) -> str:
@@ -101,10 +104,120 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-def _run_barrybot(script_name: str, mode: str, prompt: str) -> dict:
+def _artifact_env(script_name: str, mode: str, run_id: str) -> dict[str, str]:
+    if script_name != "barrybot_mcp.py":
+        return {}
+    artifact_id = f"{run_id}-{mode}.data.md"
+    artifact_path = _resolve_artifact(artifact_id)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    if artifact_path.exists():
+        artifact_path.unlink()
+    return {
+        "BARRYBOT_EXFIL_ID": artifact_id,
+        "BARRYBOT_EXFIL_PATH": str(artifact_path),
+    }
+
+
+@lru_cache(maxsize=1)
+def _management_api_key() -> str | None:
+    for name in (
+        "AI_DEFENSE_MGMT_API_KEY",
+        "AI_DEFENSE_MANAGEMENT_API_KEY",
+        "AI_DEFENSE_MGMT_API",
+    ):
+        value = os.environ.get(name)
+        if value:
+            return value
+
+    if LOCAL_SESSION_CACHE_FILE.exists():
+        try:
+            token = None
+            for line in LOCAL_SESSION_CACHE_FILE.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("session_token="):
+                    token = line.split("=", 1)[1].strip()
+                    break
+            if token:
+                data = base64.b64decode(token)
+                env_key = os.environ.get("DEVENV_USER", "default-key-fallback")
+                repeated_key = (env_key * (len(data) // len(env_key) + 1))[: len(data)]
+                plaintext = bytes(a ^ b for a, b in zip(data, repeated_key.encode())).decode("utf-8")
+                parts = plaintext.split(":")
+                if len(parts) > 4 and parts[4] and parts[4] != "none":
+                    return parts[4]
+        except Exception:
+            pass
+
+    if LOCAL_SESSION_CACHE.exists():
+        try:
+            spec = importlib.util.spec_from_file_location("agentsec_session_cache", LOCAL_SESSION_CACHE)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                getter = getattr(module, "get_mgmt_api", None)
+                if getter:
+                    value = getter()
+                    if value:
+                        return value
+        except Exception:
+            pass
+
+    return None
+
+
+def _fetch_event_log(event_id: str | None) -> list[str]:
+    if not event_id:
+        return []
+    api_key = _management_api_key()
+    if not api_key:
+        return [f"[aidefense] Event ID: {event_id}"]
+
+    url = f"https://api.security.cisco.com/api/ai-defense/v1/events/{event_id}?{urlencode({'expanded': 'true'})}"
+    req = Request(url, headers={"X-Cisco-AI-Defense-Tenant-API-Key": api_key})
+    try:
+        with urlopen(req, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return [f"[aidefense] Event ID: {event_id}"]
+
+    event = payload.get("event") or {}
+    if not event:
+        return [f"[aidefense] Event ID: {event_id}"]
+
+    lines = [f"[aidefense] Event ID: {event.get('event_id', event_id)}"]
+    if event.get("direction"):
+        lines.append(f"[aidefense] Direction: {event['direction']}")
+    if event.get("event_action"):
+        lines.append(f"[aidefense] Action: {event['event_action']}")
+    policy = event.get("policy") or {}
+    if policy.get("policy_name"):
+        lines.append(f"[aidefense] Policy: {policy['policy_name']}")
+    connection = event.get("connection") or {}
+    if connection.get("connection_name"):
+        lines.append(f"[aidefense] Connection: {connection['connection_name']}")
+
+    guardrails = []
+    for match in (event.get("rule_matches") or {}).get("items") or []:
+        parts = [
+            match.get("guardrail_type"),
+            match.get("guardrail_ruleset_type"),
+            match.get("guardrail_entity"),
+        ]
+        label = " / ".join(part for part in parts if part)
+        action = match.get("guardrail_action")
+        guardrails.append(f"{label} -> {action}" if label and action else label or action or "")
+    if guardrails:
+        lines.append(f"[aidefense] Guardrails: {'; '.join(item for item in guardrails if item)}")
+
+    return lines
+
+
+def _run_barrybot(script_name: str, mode: str, prompt: str, extra_env: dict[str, str] | None = None) -> dict:
     """Run a demo script with --mode and --prompt --json; return parsed JSON."""
     script_path = _resolve_run_script(script_name)
     env = _subprocess_env()
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(
         [
             env.get("PYTHON_EXE", "python3"),
@@ -181,14 +294,14 @@ def source():
 @app.route("/api/artifact", methods=["GET"])
 def artifact():
     """Return demo artifact content for the frontend detail viewer."""
-    name = request.args.get("name", "")
+    artifact_id = request.args.get("id", "")
     try:
-        artifact_path = _resolve_artifact(name)
+        artifact_path = _resolve_artifact(artifact_id)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 404
     if not artifact_path.exists():
         return jsonify({"error": f"{artifact_path.name} not found"}), 404
-    return jsonify({"name": artifact_path.name, "content": artifact_path.read_text()})
+    return jsonify({"id": artifact_id, "name": ".data.md", "content": artifact_path.read_text()})
 
 
 @app.route("/api/run", methods=["POST"])
@@ -203,14 +316,14 @@ def run():
         _resolve_run_script(script_name)
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"error": str(exc)}), 400
-    if script_name == "barrybot_mcp.py":
-        _clear_artifacts(".data.md")
     modes = data.get("modes", ["monitor", "enforce"])
+    run_id = uuid.uuid4().hex
 
     results = {}
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
-            executor.submit(_run_barrybot, script_name, mode, prompt): mode for mode in modes
+            executor.submit(_run_barrybot, script_name, mode, prompt, _artifact_env(script_name, mode, run_id)): mode
+            for mode in modes
         }
         for future in as_completed(futures):
             mode = futures[future]
@@ -223,6 +336,10 @@ def run():
                     "decision": {"action": "error", "reasons": [str(e)]},
                     "logs": [],
                 }
+
+    for result in results.values():
+        decision = result.get("decision") or {}
+        result["event_log"] = _fetch_event_log(decision.get("event_id"))
 
     return jsonify({"prompt": prompt, "script": script_name, "results": results})
 

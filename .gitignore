@@ -1,6 +1,7 @@
 .DS_Store
 .env
 .data.md
+.artifacts/
 .venv/
 venv/
 __pycache__/

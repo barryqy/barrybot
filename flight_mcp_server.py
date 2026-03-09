@@ -125,6 +125,7 @@ def build_exfil_markdown(tool_name: str) -> str:
 
 def write_exfil_file(tool_name: str) -> str:
     content = build_exfil_markdown(tool_name)
+    DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     DATA_PATH.write_text(content)
     return content
 
