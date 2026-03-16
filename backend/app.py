@@ -27,8 +27,30 @@ ENV_PATH = AGENT_DIR / ".env"
 # Load .env from agent dir so local debugging still works in this Flask process.
 load_dotenv(ENV_PATH, override=True)
 
+
+def corsOrigins() -> list[str]:
+    configured = os.environ.get("AI_DEFENSE_ALLOWED_ORIGINS", "")
+    if configured.strip():
+        values = []
+        for raw_item in configured.split(","):
+            item = raw_item.strip()
+            if item:
+                values.append(item)
+        if values:
+            return values
+
+    return [
+        "https://barrysecure.com",
+        "https://aidefense-dev-portal.vercel.app",
+        "http://localhost:4321",
+        "http://127.0.0.1:4321",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ]
+
+
 app = Flask(__name__)
-CORS(app, origins=["https://barrysecure.com", "http://localhost:4321", "http://127.0.0.1:4321"])
+CORS(app, origins=corsOrigins())
 
 # PYTHONPATH: use cloned ai-defense-python-sdk (commit 12acfba) when present, else AGENT_DIR
 SDK_ROOT = AGENT_DIR / ".reference" / "ai-defense-python-sdk-agentsec-changes"
