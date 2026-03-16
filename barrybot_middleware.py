@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BarryBot using LangChain middleware instead of agentsec.protect().
+BarryBot using AIDefenseAgentsecMiddleware.
 
 Usage: python3 barrybot_middleware.py --mode monitor|enforce --prompt "..." --json
 """
