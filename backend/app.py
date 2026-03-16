@@ -23,6 +23,12 @@ from flask_cors import CORS
 # Agent directory: parent of backend/ (contains demo scripts, users.db, artifacts)
 BACKEND_DIR = Path(__file__).resolve().parent
 AGENT_DIR = BACKEND_DIR.parent
+MIDDLEWARE_DIR = Path(
+    os.environ.get(
+        "LANGCHAIN_MIDDLEWARE_DIR",
+        str(Path.home() / "code" / "ai-defense-langchain-middleware-personal"),
+    )
+)
 ENV_PATH = AGENT_DIR / ".env"
 # Load .env from agent dir so local debugging still works in this Flask process.
 load_dotenv(ENV_PATH, override=True)
@@ -57,6 +63,7 @@ SDK_ROOT = AGENT_DIR / ".reference" / "ai-defense-python-sdk-agentsec-changes"
 REPO_ROOT = SDK_ROOT if SDK_ROOT.exists() else AGENT_DIR
 RUN_SCRIPT_FILES = {
     "barrybot.py": AGENT_DIR / "barrybot.py",
+    "barrybot_middleware.py": AGENT_DIR / "barrybot_middleware.py",
     "barrybot_mcp.py": AGENT_DIR / "barrybot_mcp.py",
 }
 SOURCE_FILES = {
@@ -124,6 +131,13 @@ def _subprocess_env() -> dict[str, str]:
     env.update({key: value for key, value in dotenv_values(ENV_PATH).items() if value is not None})
     env["PYTHONPATH"] = str(REPO_ROOT)
     return env
+
+
+def _middleware_python_exe(env: dict[str, str]) -> str:
+    runtime_python = MIDDLEWARE_DIR / ".venv" / "bin" / "python"
+    if runtime_python.exists():
+        return str(runtime_python)
+    return env.get("PYTHON_EXE", "python3")
 
 
 def _artifact_env(script_name: str, mode: str, run_id: str) -> dict[str, str]:
@@ -240,9 +254,10 @@ def _run_barrybot(script_name: str, mode: str, prompt: str, extra_env: dict[str,
     env = _subprocess_env()
     if extra_env:
         env.update(extra_env)
+    python_exe = _middleware_python_exe(env) if script_name == "barrybot_middleware.py" else env.get("PYTHON_EXE", "python3")
     result = subprocess.run(
         [
-            env.get("PYTHON_EXE", "python3"),
+            python_exe,
             script_path.name,
             "--mode",
             mode,
