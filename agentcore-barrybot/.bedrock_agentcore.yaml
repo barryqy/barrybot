@@ -1,0 +1,182 @@
+default_agent: barrybot_agentcore
+agents:
+  barrybot_agentcore:
+    name: barrybot_agentcore
+    language: python
+    node_version: '20'
+    entrypoint: /Users/bayuan/code/GitHub/DevNet/aidefense/agentsec/agentcore-barrybot/agentcore_barrybot_app.py
+    deployment_type: direct_code_deploy
+    runtime_type: PYTHON_3_11
+    platform: linux/arm64
+    container_runtime: null
+    source_path: /Users/bayuan/code/GitHub/DevNet/aidefense/agentsec/agentcore-barrybot
+    aws:
+      execution_role: arn:aws:iam::027920019411:role/AmazonBedrockAgentCoreSDKRuntime-us-west-2-e1c5ae0654
+      execution_role_auto_create: false
+      account: 027920019411
+      region: us-west-2
+      ecr_repository: null
+      ecr_auto_create: false
+      s3_path: s3://bedrock-agentcore-codebuild-sources-027920019411-us-west-2
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: false
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: barrybot_agentcore-dHLQ1t7Uld
+      agent_arn: arn:aws:bedrock-agentcore:us-west-2:027920019411:runtime/barrybot_agentcore-dHLQ1t7Uld
+      agent_session_id: null
+    codebuild:
+      project_name: null
+      execution_role: null
+      source_bucket: null
+    memory:
+      mode: STM_ONLY
+      memory_id: barrybot_agentcore_mem-SktlWC4qmJ
+      memory_arn: arn:aws:bedrock-agentcore:us-west-2:027920019411:memory/barrybot_agentcore_mem-SktlWC4qmJ
+      memory_name: barrybot_agentcore_mem
+      event_expiry_days: 30
+      first_invoke_memory_check_done: true
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
+  barrybot_agentcore_container:
+    name: barrybot_agentcore_container
+    language: python
+    node_version: '20'
+    entrypoint: /Users/bayuan/code/GitHub/DevNet/aidefense/agentsec/agentcore-barrybot/agentcore_barrybot_app.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: none
+    source_path: /Users/bayuan/code/GitHub/DevNet/aidefense/agentsec/agentcore-barrybot
+    aws:
+      execution_role: arn:aws:iam::027920019411:role/AmazonBedrockAgentCoreSDKRuntime-us-west-2-f16a27308e
+      execution_role_auto_create: false
+      account: 027920019411
+      region: us-west-2
+      ecr_repository: 027920019411.dkr.ecr.us-west-2.amazonaws.com/bedrock-agentcore-barrybot
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: false
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: null
+      agent_arn: null
+      agent_session_id: null
+    codebuild:
+      project_name: null
+      execution_role: null
+      source_bucket: null
+    memory:
+      mode: STM_ONLY
+      memory_id: barrybot_agentcore_container_mem-LuRQTcC5qQ
+      memory_arn: arn:aws:bedrock-agentcore:us-west-2:027920019411:memory/barrybot_agentcore_container_mem-LuRQTcC5qQ
+      memory_name: barrybot_agentcore_container_mem
+      event_expiry_days: 30
+      first_invoke_memory_check_done: true
+      was_created_by_toolkit: true
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
+  barrybot_agentcore_monitor:
+    name: barrybot_agentcore_monitor
+    language: python
+    node_version: '20'
+    entrypoint: /Users/bayuan/code/GitHub/DevNet/aidefense/agentsec/agentcore-barrybot/agentcore_barrybot_app.py
+    deployment_type: direct_code_deploy
+    runtime_type: PYTHON_3_11
+    platform: linux/arm64
+    container_runtime: null
+    source_path: /Users/bayuan/code/GitHub/DevNet/aidefense/agentsec/agentcore-barrybot
+    aws:
+      execution_role: arn:aws:iam::027920019411:role/AmazonBedrockAgentCoreSDKRuntime-us-west-2-e268e1ccca
+      execution_role_auto_create: false
+      account: 027920019411
+      region: us-west-2
+      ecr_repository: null
+      ecr_auto_create: false
+      s3_path: s3://bedrock-agentcore-codebuild-sources-027920019411-us-west-2
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: false
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: barrybot_agentcore_monitor-utmRjHEbAI
+      agent_arn: arn:aws:bedrock-agentcore:us-west-2:027920019411:runtime/barrybot_agentcore_monitor-utmRjHEbAI
+      agent_session_id: null
+    codebuild:
+      project_name: null
+      execution_role: null
+      source_bucket: null
+    memory:
+      mode: STM_ONLY
+      memory_id: barrybot_agentcore_monitor_mem-iMCfvr6fv7
+      memory_arn: arn:aws:bedrock-agentcore:us-west-2:027920019411:memory/barrybot_agentcore_monitor_mem-iMCfvr6fv7
+      memory_name: barrybot_agentcore_monitor_mem
+      event_expiry_days: 30
+      first_invoke_memory_check_done: true
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false

@@ -3,26 +3,33 @@ Flask API for agentsec conference demo.
 Serves /api/health, /api/run (runs barrybot.py subprocesses), /api/source.
 """
 
-import os
-import json
-import subprocess
-import uuid
-import importlib.util
 import base64
-from pathlib import Path
+import importlib.util
+import json
+import os
+import subprocess
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from dotenv import dotenv_values, load_dotenv
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - optional in some local envs
+    yaml = None
 
 # Agent directory: parent of backend/ (contains demo scripts, users.db, artifacts)
 BACKEND_DIR = Path(__file__).resolve().parent
 AGENT_DIR = BACKEND_DIR.parent
+AGENTCORE_DIR = AGENT_DIR / "agentcore-barrybot"
 MIDDLEWARE_DIR = Path(
     os.environ.get(
         "LANGCHAIN_MIDDLEWARE_DIR",
@@ -58,9 +65,12 @@ def corsOrigins() -> list[str]:
 app = Flask(__name__)
 CORS(app, origins=corsOrigins())
 
-# PYTHONPATH: use cloned ai-defense-python-sdk (commit 12acfba) when present, else AGENT_DIR
+# PYTHONPATH: use cloned ai-defense-python-sdk when present, else AGENT_DIR
 SDK_ROOT = AGENT_DIR / ".reference" / "ai-defense-python-sdk-agentsec-changes"
 REPO_ROOT = SDK_ROOT if SDK_ROOT.exists() else AGENT_DIR
+AGENTCORE_DEMO_KEY = "aws_agentcore"
+AGENTCORE_MONITOR_AGENT_NAME = os.environ.get("AGENTCORE_BARRYBOT_MONITOR_AGENT_NAME", "barrybot_agentcore_monitor")
+AGENTCORE_ENFORCE_AGENT_NAME = os.environ.get("AGENTCORE_BARRYBOT_ENFORCE_AGENT_NAME", "barrybot_agentcore")
 RUN_SCRIPT_FILES = {
     "barrybot.py": AGENT_DIR / "barrybot.py",
     "barrybot_middleware.py": AGENT_DIR / "barrybot_middleware.py",
@@ -69,14 +79,28 @@ RUN_SCRIPT_FILES = {
 SOURCE_FILES = {
     **RUN_SCRIPT_FILES,
     "flight_mcp_server.py": AGENT_DIR / "flight_mcp_server.py",
+    AGENTCORE_DEMO_KEY: AGENTCORE_DIR / "agent_factory.py",
+    "agentcore_barrybot_app.py": AGENTCORE_DIR / "agentcore_barrybot_app.py",
 }
+AGENTCORE_INVOKE_SCRIPT = AGENTCORE_DIR / "scripts" / "invoke_bearer.py"
+AGENTCORE_CONFIG_FILE = AGENTCORE_DIR / ".bedrock_agentcore.yaml"
 ARTIFACT_DIR = AGENT_DIR / ".artifacts"
 ARTIFACT_DIR.mkdir(exist_ok=True)
-LOCAL_SESSION_CACHE = AGENT_DIR.parent / "DevNet" / "aidefense" / "aidefense" / "session_cache.py"
-LOCAL_SESSION_CACHE_FILE = LOCAL_SESSION_CACHE.parent / ".aidefense" / ".cache"
+LOCAL_SESSION_CACHE_CANDIDATES = [
+    AGENT_DIR.parent / "aidefense" / "session_cache.py",
+    AGENT_DIR.parent / "DevNet" / "aidefense" / "aidefense" / "session_cache.py",
+]
+LOCAL_SESSION_CACHE_FILE_CANDIDATES = [
+    AGENT_DIR.parent / "aidefense" / ".aidefense" / ".cache",
+    AGENT_DIR.parent / "DevNet" / "aidefense" / "aidefense" / ".aidefense" / ".cache",
+]
 
 
 def _resolve_run_script(script_name: str) -> Path:
+    if script_name == AGENTCORE_DEMO_KEY:
+        if not AGENTCORE_INVOKE_SCRIPT.exists():
+            raise FileNotFoundError(f"{AGENTCORE_INVOKE_SCRIPT.name} not found")
+        return AGENTCORE_INVOKE_SCRIPT
     script_path = RUN_SCRIPT_FILES.get(script_name or "barrybot.py")
     if not script_path:
         raise ValueError(f"Unsupported script: {script_name}")
@@ -108,12 +132,10 @@ def _short_error_from_stderr(stderr: str) -> str:
     if not stderr or not stderr.strip():
         return "Subprocess failed"
     lines = stderr.strip().splitlines()
-    # Prefer last line that looks like an exception (e.g. "openai.UnprocessableEntityError: ...")
     for line in reversed(lines):
         line = line.strip()
         if line.startswith(("Error", "error", "Exception", "Traceback")) or "Error:" in line or "Exception:" in line:
             return line[:500]
-    # Otherwise last non-empty line
     for line in reversed(lines):
         if line.strip() and not line.strip().startswith("["):
             return line.strip()[:500]
@@ -125,6 +147,17 @@ def _collect_logs(*streams: str) -> list[str]:
     return [stream for stream in streams if stream and stream.strip()]
 
 
+def _filter_noise_lines(lines: list[str]) -> list[str]:
+    filtered = []
+    for line in lines:
+        if "RequestsDependencyWarning" in line:
+            continue
+        if line.strip() == "warnings.warn(":
+            continue
+        filtered.append(line)
+    return filtered
+
+
 def _subprocess_env() -> dict[str, str]:
     """Build subprocess env from current process env plus the latest .env values on disk."""
     env = {**os.environ}
@@ -133,11 +166,139 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
+def _agentcore_python_exe(env: dict[str, str]) -> str:
+    runtime_python = AGENTCORE_DIR / ".venv" / "bin" / "python"
+    if runtime_python.exists():
+        return str(runtime_python)
+    return env.get("PYTHON_EXE", "python3")
+
+
 def _middleware_python_exe(env: dict[str, str]) -> str:
     runtime_python = MIDDLEWARE_DIR / ".venv" / "bin" / "python"
     if runtime_python.exists():
         return str(runtime_python)
     return env.get("PYTHON_EXE", "python3")
+
+
+@lru_cache(maxsize=8)
+def _agentcore_runtime_info(agent_name: str) -> tuple[str | None, str]:
+    if not AGENTCORE_CONFIG_FILE.exists() or yaml is None:
+        return None, os.environ.get("AWS_REGION", "us-west-2")
+
+    try:
+        payload = yaml.safe_load(AGENTCORE_CONFIG_FILE.read_text()) or {}
+    except Exception:
+        return None, os.environ.get("AWS_REGION", "us-west-2")
+
+    agents = payload.get("agents") or {}
+    agent_cfg = agents.get(agent_name) or {}
+    bedrock_cfg = agent_cfg.get("bedrock_agentcore") or {}
+    aws_cfg = agent_cfg.get("aws") or {}
+    agent_id = bedrock_cfg.get("agent_id")
+    region = aws_cfg.get("region") or os.environ.get("AWS_REGION", "us-west-2")
+    return agent_id, region
+
+
+def _slice_agentcore_log_lines(lines: list[str], session_id: str | None) -> list[str]:
+    if not lines:
+        return []
+    if not session_id:
+        return lines[-30:]
+
+    match_index = -1
+    for idx, line in enumerate(lines):
+        if session_id in line:
+            match_index = idx
+
+    if match_index == -1:
+        return lines[-30:]
+
+    start = max(0, match_index - 12)
+    return lines[start : match_index + 1]
+
+
+def _fetch_agentcore_cloudwatch_logs(agent_name: str, started_at_ms: int, session_id: str | None = None) -> list[str]:
+    agent_id, region = _agentcore_runtime_info(agent_name)
+    if not agent_id:
+        return []
+
+    log_group = f"/aws/bedrock-agentcore/runtimes/{agent_id}-DEFAULT"
+    start_time = max(started_at_ms - 15_000, 0)
+    def extract_lines(events: list[dict]) -> list[str]:
+        lines = []
+        for event in events:
+            message = (event.get("message") or "").strip()
+            if not message:
+                continue
+            for line in message.splitlines():
+                line = line.strip()
+                if line:
+                    lines.append(f"[cloudwatch] {line}")
+        return lines
+
+    try:
+        import boto3
+    except ImportError:
+        boto3 = None
+
+    if boto3 is not None:
+        client = boto3.client("logs", region_name=region)
+        for _ in range(4):
+            try:
+                payload = client.filter_log_events(
+                    logGroupName=log_group,
+                    startTime=start_time,
+                    limit=80,
+                )
+            except Exception:
+                break
+
+            lines = extract_lines(payload.get("events") or [])
+            if lines:
+                return _slice_agentcore_log_lines(lines, session_id)
+            time.sleep(1)
+
+    for _ in range(4):
+        try:
+            result = subprocess.run(
+                [
+                    "aws",
+                    "logs",
+                    "filter-log-events",
+                    "--region",
+                    region,
+                    "--log-group-name",
+                    log_group,
+                    "--start-time",
+                    str(start_time),
+                    "--limit",
+                    "80",
+                    "--output",
+                    "json",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except Exception:
+            return []
+
+        if result.returncode != 0:
+            time.sleep(1)
+            continue
+
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            time.sleep(1)
+            continue
+
+        lines = extract_lines(payload.get("events") or [])
+        if lines:
+            return _slice_agentcore_log_lines(lines, session_id)
+        time.sleep(1)
+
+    return []
 
 
 def _artifact_env(script_name: str, mode: str, run_id: str) -> dict[str, str]:
@@ -165,36 +326,42 @@ def _management_api_key() -> str | None:
         if value:
             return value
 
-    if LOCAL_SESSION_CACHE_FILE.exists():
+    for cache_file in LOCAL_SESSION_CACHE_FILE_CANDIDATES:
+        if not cache_file.exists():
+            continue
         try:
             token = None
-            for line in LOCAL_SESSION_CACHE_FILE.read_text().splitlines():
+            for line in cache_file.read_text().splitlines():
                 line = line.strip()
                 if line.startswith("session_token="):
                     token = line.split("=", 1)[1].strip()
                     break
-            if token:
-                data = base64.b64decode(token)
-                env_key = os.environ.get("DEVENV_USER", "default-key-fallback")
-                repeated_key = (env_key * (len(data) // len(env_key) + 1))[: len(data)]
-                plaintext = bytes(a ^ b for a, b in zip(data, repeated_key.encode())).decode("utf-8")
-                parts = plaintext.split(":")
-                if len(parts) > 4 and parts[4] and parts[4] != "none":
-                    return parts[4]
+            if not token:
+                continue
+            data = base64.b64decode(token)
+            env_key = os.environ.get("DEVENV_USER", "default-key-fallback")
+            repeated_key = (env_key * (len(data) // len(env_key) + 1))[: len(data)]
+            plaintext = bytes(a ^ b for a, b in zip(data, repeated_key.encode())).decode("utf-8")
+            parts = plaintext.split(":")
+            if len(parts) > 4 and parts[4] and parts[4] != "none":
+                return parts[4]
         except Exception:
             pass
 
-    if LOCAL_SESSION_CACHE.exists():
+    for session_cache in LOCAL_SESSION_CACHE_CANDIDATES:
+        if not session_cache.exists():
+            continue
         try:
-            spec = importlib.util.spec_from_file_location("agentsec_session_cache", LOCAL_SESSION_CACHE)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                getter = getattr(module, "get_mgmt_api", None)
-                if getter:
-                    value = getter()
-                    if value:
-                        return value
+            spec = importlib.util.spec_from_file_location("agentsec_session_cache", session_cache)
+            if not spec or not spec.loader:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            getter = getattr(module, "get_mgmt_api", None)
+            if getter:
+                value = getter()
+                if value:
+                    return value
         except Exception:
             pass
 
@@ -278,13 +445,11 @@ def _run_barrybot(script_name: str, mode: str, prompt: str, extra_env: dict[str,
             "decision": {"action": "error", "reasons": [_short_error_from_stderr(result.stderr or "")]},
             "logs": _collect_logs(result.stdout, result.stderr),
         }
-    # Stdout may have SDK banner line(s) before the JSON (e.g. "[agentsec] LLM: ..."); take last JSON object
     raw = result.stdout.strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-    # Try from first { to end, then line by line
     start = raw.find("{")
     if start != -1:
         try:
@@ -310,6 +475,104 @@ def _run_barrybot(script_name: str, mode: str, prompt: str, extra_env: dict[str,
         },
         "logs": _collect_logs(result.stdout, result.stderr),
     }
+
+
+def _parse_agentcore_output(result: subprocess.CompletedProcess[str], mode: str) -> dict:
+    stdout_lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    stderr_lines = _filter_noise_lines([line.strip() for line in (result.stderr or "").splitlines() if line.strip()])
+
+    visible_lines = []
+    aux_logs = []
+    for line in stdout_lines:
+        if line.startswith("[agentsec]"):
+            aux_logs.append(line)
+            continue
+        visible_lines.append(line)
+
+    message = "\n".join(visible_lines).strip()
+    logs = _collect_logs("\n".join(aux_logs), "\n".join(stderr_lines))
+
+    if message.startswith("Blocked by AI Defense"):
+        reasons = []
+        reason_text = message.split(":", 1)[1].strip() if ":" in message else ""
+        if reason_text:
+            reasons.append(reason_text)
+        return {
+            "response": None,
+            "blocked": True,
+            "decision": {"action": "block", "reasons": reasons},
+            "logs": logs,
+            "agentcore": {
+                "invoke_path": "runtime_direct",
+                "runtime_mode": mode,
+                "runtime": "aws_agentcore",
+            },
+        }
+
+    if result.returncode == 0 and message:
+        return {
+            "response": message,
+            "blocked": False,
+            "decision": {"action": "allow"},
+            "logs": logs,
+            "agentcore": {
+                "invoke_path": "runtime_direct",
+                "runtime_mode": mode,
+                "runtime": "aws_agentcore",
+            },
+        }
+
+    short_error = _short_error_from_stderr(result.stderr or "")
+    if not short_error and visible_lines:
+        short_error = visible_lines[-1]
+    return {
+        "response": None,
+        "blocked": True,
+        "decision": {"action": "error", "reasons": [short_error or "AgentCore invocation failed"]},
+        "logs": _collect_logs(result.stdout, result.stderr),
+        "agentcore": {
+            "invoke_path": "runtime_direct",
+            "runtime_mode": mode,
+            "runtime": "aws_agentcore",
+        },
+    }
+
+
+def _run_agentcore(mode: str, prompt: str) -> dict:
+    if not AGENTCORE_INVOKE_SCRIPT.exists():
+        raise FileNotFoundError(f"AgentCore invoke script not found for mode: {mode}")
+    runtime_name = AGENTCORE_MONITOR_AGENT_NAME if mode == "monitor" else AGENTCORE_ENFORCE_AGENT_NAME
+
+    env = _subprocess_env()
+    session_id = f"session-{uuid.uuid4().hex}"
+    env["AGENTCORE_BARRYBOT_AGENT_NAME"] = runtime_name
+    env["AGENTCORE_SESSION_ID"] = session_id
+    started_at_ms = int(time.time() * 1000)
+    result = subprocess.run(
+        [
+            _agentcore_python_exe(env),
+            str(AGENTCORE_INVOKE_SCRIPT),
+            prompt,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+        cwd=str(AGENTCORE_DIR),
+        env=env,
+    )
+    parsed = _parse_agentcore_output(result, mode)
+    parsed["agentcore"]["agent_name"] = runtime_name
+    parsed["agentcore"]["session_id"] = session_id
+    cloudwatch_logs = _fetch_agentcore_cloudwatch_logs(runtime_name, started_at_ms, session_id)
+    if cloudwatch_logs:
+        parsed["logs"] = [*cloudwatch_logs, *(parsed.get("logs") or [])]
+    return parsed
+
+
+def _run_demo(script_name: str, mode: str, prompt: str, extra_env: dict[str, str] | None = None) -> dict:
+    if script_name == AGENTCORE_DEMO_KEY:
+        return _run_agentcore(mode, prompt)
+    return _run_barrybot(script_name, mode, prompt, extra_env)
 
 
 @app.route("/api/health", methods=["GET"])
@@ -359,7 +622,7 @@ def run():
     results = {}
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
-            executor.submit(_run_barrybot, script_name, mode, prompt, _artifact_env(script_name, mode, run_id)): mode
+            executor.submit(_run_demo, script_name, mode, prompt, _artifact_env(script_name, mode, run_id)): mode
             for mode in modes
         }
         for future in as_completed(futures):
