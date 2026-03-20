@@ -54,6 +54,7 @@ def corsOrigins() -> list[str]:
 
     return [
         "https://barrysecure.com",
+        "https://dev.aidefense.cisco.com",
         "https://aidefense-dev-portal.vercel.app",
         "http://localhost:4321",
         "http://127.0.0.1:4321",
