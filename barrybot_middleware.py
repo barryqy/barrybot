@@ -32,6 +32,31 @@ for root in MIDDLEWARE_ROOTS:
         sys.path.insert(0, str(src_dir))
         break
 
+
+def add_sdk_from_backend_venv() -> None:
+    try:
+        import aidefense  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+
+    venv_root = Path(__file__).resolve().parent / "venv" / "lib"
+    if not venv_root.exists():
+        return
+
+    for site_dir in sorted(venv_root.glob("python*/site-packages")):
+        if not site_dir.exists():
+            continue
+        sys.path.insert(0, str(site_dir))
+        try:
+            import aidefense  # noqa: F401
+            return
+        except ModuleNotFoundError:
+            continue
+
+
+add_sdk_from_backend_venv()
+
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
