@@ -6,6 +6,7 @@ APP_GROUP="${APP_GROUP:-$APP_USER}"
 REPO_DIR="${REPO_DIR:-/home/${APP_USER}/barrybot}"
 REPO_URL="${REPO_URL:-https://github.com/barryqy/barrybot.git}"
 BRANCH="${BRANCH:-main}"
+MIDDLEWARE_DIR="${LANGCHAIN_MIDDLEWARE_DIR:-/home/${APP_USER}/code/ai-defense-langchain-middleware-personal}"
 
 export APP_USER APP_GROUP REPO_DIR
 
@@ -28,6 +29,11 @@ fi
 sudo python3 -m venv "${REPO_DIR}/venv"
 sudo "${REPO_DIR}/venv/bin/pip" install -q --upgrade pip
 sudo "${REPO_DIR}/venv/bin/pip" install -q -r "${REPO_DIR}/backend/requirements.txt"
+
+if [ -x "${MIDDLEWARE_DIR}/.venv/bin/python" ]; then
+  sudo "${MIDDLEWARE_DIR}/.venv/bin/python" -m pip install -q --upgrade pip
+  sudo "${MIDDLEWARE_DIR}/.venv/bin/python" -m pip install -q cisco-aidefense-sdk==2.1.0
+fi
 
 sudo "${REPO_DIR}/deploy/install-systemd.sh"
 sudo systemctl enable agentsec-backend
