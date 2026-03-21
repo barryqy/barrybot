@@ -175,7 +175,22 @@ def _agentcore_python_exe(env: dict[str, str]) -> str:
 def _middleware_python_exe(env: dict[str, str]) -> str:
     runtime_python = MIDDLEWARE_DIR / ".venv" / "bin" / "python"
     if runtime_python.exists():
-        return str(runtime_python)
+        try:
+            probe = subprocess.run(
+                [
+                    str(runtime_python),
+                    "-c",
+                    "import aidefense, aidefense_langchain",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+            if probe.returncode == 0:
+                return str(runtime_python)
+        except Exception:
+            pass
     return env.get("PYTHON_EXE", "python3")
 
 
