@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -66,9 +67,6 @@ def corsOrigins() -> list[str]:
 app = Flask(__name__)
 CORS(app, origins=corsOrigins())
 
-# PYTHONPATH: use cloned ai-defense-python-sdk when present, else AGENT_DIR
-SDK_ROOT = AGENT_DIR / ".reference" / "ai-defense-python-sdk-agentsec-changes"
-REPO_ROOT = SDK_ROOT if SDK_ROOT.exists() else AGENT_DIR
 AGENTCORE_DEMO_KEY = "aws_agentcore"
 AGENTCORE_MONITOR_AGENT_NAME = os.environ.get("AGENTCORE_BARRYBOT_MONITOR_AGENT_NAME", "barrybot_agentcore_monitor")
 AGENTCORE_ENFORCE_AGENT_NAME = os.environ.get("AGENTCORE_BARRYBOT_ENFORCE_AGENT_NAME", "barrybot_agentcore")
@@ -163,7 +161,7 @@ def _subprocess_env() -> dict[str, str]:
     """Build subprocess env from current process env plus the latest .env values on disk."""
     env = {**os.environ}
     env.update({key: value for key, value in dotenv_values(ENV_PATH).items() if value is not None})
-    env["PYTHONPATH"] = str(REPO_ROOT)
+    env.setdefault("PYTHON_EXE", sys.executable)
     return env
 
 
